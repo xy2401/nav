@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<!-- 改了 style.css / app.js 后，把下面三处 ?v= 改成新的版本号（如日期），浏览器就会重新下载 -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>导航</title>
+<link rel="stylesheet" href="style.css?v=20261012c">
+<script type="importmap">
+{
+  "imports": {
+    "vue": "https://cdn.jsdelivr.net/npm/vue@3.5.43/dist/vue.esm-browser.prod.js",
+    "marked": "https://cdn.jsdelivr.net/npm/marked@18.1.0/+esm",
+    "dompurify": "https://cdn.jsdelivr.net/npm/dompurify@3.4.16/+esm",
+    "sortablejs": "https://cdn.jsdelivr.net/npm/sortablejs@1.15.7/+esm",
+    "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.2/+esm"
+  }
+}
+</script>
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/vue@3.5.43/dist/vue.esm-browser.prod.js">
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/marked@18.1.0/+esm">
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/dompurify@3.4.16/+esm">
+<link rel="modulepreload" href="app.js?v=20261012c">
+<script src="https://cdn.jsdelivr.net/npm/iconify-icon@3.0.3/dist/iconify-icon.min.js" async></script>
+<script type="module" src="app.js?v=20261012c"></script>
+</head>
+<body>
+<!-- 先显示上次渲染的快照，Vue 挂载后替换 -->
+<div id="app"></div>
+<script>document.getElementById('app').innerHTML = localStorage.getItem('snap') || ''</script>
+
+<template id="tpl">
+<div class="wrap" :class="{ editing }">
+  <header class="bar">
+    <nav class="tabs" ref="tabs">
+      <a v-for="(p, i) in pages" :key="p.name" class="tab" :class="{ on: i === cur }"
+         @click="source && cancelSource(); cur = i" @dblclick="renameTab(i)">{{ p.name }}<span class="x" @click.stop="delTab(i)">✕</span></a>
+    </nav>
+    <button class="ghost" title="新标签" @click="addTab">＋</button>
+    <span class="grow"></span>
+    <template v-if="source">
+      <button class="primary" @click="saveSource">✓ 保存</button>
+      <button @click="cancelSource">✕ 取消</button>
+    </template>
+    <template v-else>
+      <button :class="{ primary: editing }" title="拖动排序、换图标、增删网址和卡片" @click="editing = !editing">{{ editing ? '✓ 完成' : '⇅ 整理' }}</button>
+      <button title="编辑这一页的 markdown 文字" @click="openSource">✎ 编辑</button>
+    </template>
+    <button @click="exportZip" title="下载全部为 zip">⇩ zip</button>
+    <button @click="exportMd" title="下载当前页 .md">⇩ md</button>
+    <label class="btn" title="上传 zip 或 .md">⇧ 导入<input type="file" accept=".zip,.md,.markdown,.txt" multiple hidden @change="importFiles"></label>
+  </header>
+
+  <main v-show="!source" class="page md" ref="page" @click="onPage"></main>
+
+  <div v-if="source" class="page source">
+    <textarea v-model="draft" spellcheck="false" placeholder="# 标题&#10;&#10;第一个 # 标题（没有就取第一句话）会作为标签名"></textarea>
+  </div>
+
+  <div v-if="dlg" class="mask" @click.self="dlg = null">
+    <form class="dialog" @submit.prevent="saveItem">
+      <label>名称<input v-model="dlg.name" required autofocus></label>
+      <label>网址<input v-model="dlg.url" placeholder="https://"></label>
+      <label>图标
+        <div class="row">
+          <span class="preview" v-html="iconHTML(dlg)"></span>
+          <input v-model="dlg.icon" placeholder="mdi:home / logos:github-icon / 🚀 / 图片 URL，留空用 favicon">
+        </div>
+      </label>
+      <div class="row">
+        <button type="button" v-for="(s, k) in sets" class="set" :class="{ primary: prefix === k }" @click="loadSet(k)"><iconify-icon :icon="s[1]" width="1em" height="1em"></iconify-icon>{{ s[0] }}</button>
+      </div>
+      <div class="half">
+        <select v-model="cat" :disabled="!coll || !Object.keys(coll.cats).length">
+          <option value="">全部分类</option>
+          <option v-for="(v, c) in coll?.cats" :value="c">{{ c }}</option>
+        </select>
+        <input v-model="q" placeholder="筛选（英文）">
+      </div>
+      <div class="icons" @scroll="more">
+        <span v-if="!coll" class="hint">加载中…</span>
+        <span v-else-if="!results.length" class="hint">没有匹配的图标</span>
+        <button type="button" v-for="n in results.slice(0, limit)" :key="n" :title="n" :class="{ primary: dlg.icon === prefix + ':' + n }" @click="dlg.icon = prefix + ':' + n"><iconify-icon :icon="prefix + ':' + n" width="1em" height="1em"></iconify-icon></button>
+      </div>
+      <div class="hint">{{ sets[prefix][0] }}<template v-if="coll"> · 共 {{ results.length }} 个</template> · <template v-if="sets[prefix][2]"><a :href="sets[prefix][2]" target="_blank">官网</a> · </template><a :href="sets[prefix][3]" target="_blank">GitHub</a> · {{ sets[prefix][4] }}</div>
+      <div class="row"><button class="primary">确定</button><button type="button" @click="dlg = null">取消</button></div>
+    </form>
+  </div>
+
+  <div v-if="asking" class="mask" @click.self="answer(null)">
+    <form class="dialog ask" @submit.prevent="answer(asking.value ?? true)">
+      <p>{{ asking.text }}</p>
+      <input v-if="asking.value != null" v-model="asking.value" autofocus>
+      <div class="row"><button class="primary">确定</button><button type="button" @click="answer(null)">取消</button></div>
+    </form>
+  </div>
+</div>
+</template>
+</body>
+</html>
